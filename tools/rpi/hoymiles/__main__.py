@@ -56,14 +56,15 @@ def poll_inverter(inverter, retries=4):
                     inverter_ser=inverter_ser,
                     request=next(hoymiles.compose_esb_packet(
                         payload,
-                        seq=b'\x80',
+                        maincmd=b'\x15',
+                        subcmd=b'\x80',
                         src=dtu_ser,
                         dst=inverter_ser
                         )))
             response = None
             while com.rxtx():
                 try:
-                    response = com.get_payload()
+                    main_cmd, response = com.get_payload()
                     payload_ttl = 0
                 except Exception as e_all:
                     print(f'Error while retrieving data: {e_all}')
@@ -73,11 +74,15 @@ def poll_inverter(inverter, retries=4):
         if response:
             c_datetime = datetime.now()
             print(f'{c_datetime} Payload: ' + hoymiles.hexify_payload(response))
-            decoder = hoymiles.ResponseDecoder(response,
-                    request=com.request,
-                    inverter_ser=inverter_ser
-                    )
-            result = decoder.decode()
+            if main_cmd == 0x95:
+                decoder = hoymiles.ResponseDecoder(response,
+                        request=com.request,
+                        inverter_ser=inverter_ser
+                        )
+                result = decoder.decode()
+            else:
+                result = hoymiles.decoders.DebugDecodeAny(response)
+
             if isinstance(result, hoymiles.decoders.StatusResponse):
                 data = result.__dict__()
                 if hoymiles.HOYMILES_DEBUG_LOGGING:

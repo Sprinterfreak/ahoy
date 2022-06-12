@@ -209,7 +209,7 @@ class InverterPacketFragment:
         self.ch_tx = ch_tx
 
     @property
-    def mid(self):
+    def main_cmd(self):
         """Transaction counter"""
         return self.frame[0]
 
@@ -440,7 +440,7 @@ def frame_payload(payload):
 
     return payload
 
-def compose_esb_fragment(fragment, seq=b'\x80', src=99999999, dst=1, **params):
+def compose_esb_fragment(fragment, maincmd=b'\x15', subcmd=b'\x80\x0b', src=99999999, dst=1, **params):
     """
     Build standart ESB request fragment
 
@@ -458,10 +458,10 @@ def compose_esb_fragment(fragment, seq=b'\x80', src=99999999, dst=1, **params):
     if len(fragment) > 17:
         raise ValueError(f'ESB fragment exeeds mtu: Fragment size {len(fragment)} bytes')
 
-    packet = b'\x15'
+    packet = b'' + maincmd
     packet = packet + ser_to_hm_addr(dst)
     packet = packet + ser_to_hm_addr(src)
-    packet = packet + seq
+    packet = packet + subcmd
 
     packet = packet + fragment
 
@@ -482,6 +482,126 @@ def compose_esb_packet(packet, mtu=17, **params):
     for i in range(0, len(packet), mtu):
         fragment = compose_esb_fragment(packet[i:i+mtu], **params)
         yield fragment
+
+class RequestFactory:
+    _maincmd = b'\x15'
+    _source = b'\x00\x00\x00\x00'
+    _target = b'\x00\x00\x00\x00'
+    _subcmd = b''
+    _payload = b''
+    _mtu = 16
+
+    def __init__(self, payload, **params):
+        self._payload = payload
+
+        if 'dtu_ser' in params:
+            self.source(params['dtu_ser'])
+
+        if 'inverter_ser' in params:
+            self.target(params['inverter_ser'])
+
+        if 'maincmd' in params:
+            self.maincmd(params['maincmd'])
+
+    def source(self, source):
+        self._source = ser_to_hm_addr(source)
+
+    def target(self, target):
+        self._target = ser_to_hm_addr(target)
+
+    def maincmd(self, maincmd):
+        self._maincmd = maincmd
+
+    def subcmd(self, subcmd):
+        self._subcmd = subcmd
+
+    @property
+    def fragment(self, num):
+        return
+
+    @property
+    def crc(self):
+        crc = f_crc_m(self._payload)
+        return struct.pack('>H', crc)
+
+    def __iter__(self):
+        n_frame = 0x00
+        payload = self._payload + self.crc
+        l_payload = len(payload)
+        for i_base in range(0, l_payload, self._mtu):
+            n_frame = n_frame + 0x01
+            if i_base + self._mtu >= l_payload:
+                n_frame = n_frame + 0x80
+            subcmd = struct.pack('>B', n_frame)
+            yield ESBFrame(
+                    preamble=self._maincmd,
+                    source=self._source,
+                    target=self._target,
+                    payload=subcmd + payload[i_base:i_base+self._mtu])
+
+class ESBFrame:
+    l_addr = 4
+    preamble = b'\x15'
+    target = b'\x00\x00\x00\x00'
+    source = b'\x00\x00\x00\x00'
+    payload = b''
+
+    @staticmethod
+    def frombytes(data, **params):
+        l_addr = params.get('address_length', ESBFrame.l_addr)
+        o_target = 1 + l_addr
+        o_data = o_target + l_addr
+
+        return ESBFrame(
+                preamble=data[:1],
+                source=data[o_target:o_data],
+                target=data[1:o_target],
+                payload=data[o_data:-1],
+                **params)
+
+    @staticmethod
+    def fromhex(data, **params):
+        return ESBFrame.frombytes(bytes.fromhex(data))
+
+    def __init__(self, **params):
+        self.payload = params.get('payload', b'')
+        self.l_addr = params.get('address_length', ESBFrame.l_addr)
+        self.set_source(params['source'])
+        self.set_target(params['target'])
+
+    def set_preamble(self, preamble):
+        if len(source) != 1:
+            raise ValueError(f'Set invalid preamble legth {len(preamble)}, required 1')
+        self.preamble = preamble
+
+    def set_source(self, addr):
+        if len(addr) != self.l_addr:
+            raise ValueError(f'Set invalid source address legth {len(addr)}, required {self.l_addr}')
+        self.source = addr
+
+    def set_target(self, addr):
+        if len(addr) != self.l_addr:
+            raise ValueError(f'Set invalid target address legth {len(addr)}, required {self.l_addr}')
+        self.target = addr
+
+    @property
+    def packet(self):
+        packet = self.preamble
+        packet = packet + self.target
+        packet = packet + self.source
+        packet = packet + self.payload
+        return packet
+
+    @property
+    def crc(self):
+        crc8 = f_crc8(self.packet)
+        return struct.pack('B', crc8)
+
+    def __bytes__(self):
+        return self.packet + self.crc
+
+    def __repr__(self):
+        return hexify_payload(self.__bytes__())
 
 def compose_set_time_payload(timestamp=None):
     """
@@ -669,7 +789,7 @@ class InverterTransaction:
         if f_crc_m(payload[:-2]) != pcrc:
             raise ValueError('Payload failed CRC check.')
 
-        return payload
+        return (end_frame.main_cmd, payload,)
 
     def __retransmit_frame(self, frame_id):
         """
@@ -684,7 +804,7 @@ class InverterTransaction:
             return
 
         packet = compose_esb_fragment(b'',
-                seq=int(0x80 + frame_id).to_bytes(1, 'big'),
+                subcmd=int(0x80 + frame_id).to_bytes(1, 'big'),
                 src=self.dtu_ser,
                 dst=self.inverter_ser)
 
