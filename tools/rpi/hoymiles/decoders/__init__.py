@@ -355,6 +355,7 @@ class DebugDecodeAny(UnknownResponse):
         except UnicodeDecodeError:
             print(' type ascii  : ascii decode error')
 
+        print([t_char[0].decode() if ord(t_char[0]) >= 32 and ord(t_char[0]) < 127 else '' for t_char in struct.iter_unpack('>c', self.response)])
 
 # 1121-Series Intervers, 1 MPPT, 1 Phase
 class Hm300Decode02(EventsResponse):
