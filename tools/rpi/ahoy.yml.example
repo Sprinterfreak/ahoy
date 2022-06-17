@@ -1,7 +1,7 @@
 ---
 
 ahoy:
-  interval: 0
+  interval: 30
   sunset: true
 
   # List of available NRF24 transceivers
