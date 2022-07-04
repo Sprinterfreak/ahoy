@@ -6,7 +6,7 @@ Hoymiles Micro-Inverters decoder library
 """
 
 import struct
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import crcmod
 
 f_crc_m = crcmod.predefined.mkPredefinedCrcFun('modbus')
@@ -303,10 +303,11 @@ class EventsResponse(UnknownResponse):
 
             print(' '.join([f'{byte:02x}' for byte in chunk]) + ': ')
 
-            opcode, a_code, a_count, uptime_sec = struct.unpack('>BBHH', chunk[0:6])
+            opcode, a_code, a_count, uptime1, uptime2 = struct.unpack('>BBHHH', chunk[0:8])
             a_text = self.alarm_codes.get(a_code, 'N/A')
 
-            print(f' uptime={timedelta(seconds=uptime_sec)} a_count={a_count} opcode={opcode} a_code={a_code} a_text={a_text}')
+            local_tz = datetime.utcnow().astimezone().utcoffset().seconds
+            print(f' uptime1={timedelta(seconds=uptime1 + local_tz)} uptime2={timedelta(seconds=uptime2 + local_tz if uptime2 > 0 else 0)} a_count={a_count} opcode={opcode} a_code={a_code} a_text={a_text}')
 
             for fmt in ['BBHHHHH']:
                 print(f' {fmt:7}: ' + str(struct.unpack('>' + fmt, chunk)))
