@@ -10,8 +10,9 @@ import time
 import re
 from datetime import datetime
 import json
+from typing import Generator
 import crcmod
-from RF24 import RF24, RF24_PA_MIN, RF24_PA_LOW, RF24_PA_HIGH, RF24_PA_MAX, RF24_250KBPS, RF24_CRC_DISABLED, RF24_CRC_8, RF24_CRC_16
+from .rf24 import *
 from .decoders import *
 
 f_crc_m = crcmod.predefined.mkPredefinedCrcFun('modbus')
@@ -20,7 +21,7 @@ f_crc8 = crcmod.mkCrcFun(0x101, initCrc=0, xorOut=0)
 HOYMILES_TRANSACTION_LOGGING=False
 HOYMILES_DEBUG_LOGGING=False
 
-def ser_to_hm_addr(inverter_ser):
+def ser_to_hm_addr(inverter_ser: str) -> bytes:
     """
     Calculate the 4 bytes that the HM devices use in their internal messages to
     address each other.
@@ -32,7 +33,7 @@ def ser_to_hm_addr(inverter_ser):
     bcd = int(str(inverter_ser)[-8:], base=16)
     return struct.pack('>L', bcd)
 
-def ser_to_esb_addr(inverter_ser):
+def ser_to_esb_addr(inverter_ser: str) -> bytes:
     """
     Convert a Hoymiles inverter/DTU serial number into its
     corresponding NRF24 'enhanced shockburst' address byte sequence (5 bytes).
@@ -51,7 +52,7 @@ def ser_to_esb_addr(inverter_ser):
     air_order = ser_to_hm_addr(inverter_ser)[::-1] + b'\x01'
     return air_order[::-1]
 
-def print_addr(inverter_ser):
+def print_addr(inverter_ser: bytes) -> None:
     """
     Debug print addresses
 
@@ -78,7 +79,7 @@ class ResponseDecoderFactory:
     response = None
     time_rx = None
 
-    def __init__(self, response, **params):
+    def __init__(self, response: bytes, **params) -> None:
         self.response = response
 
         self.time_rx = params.get('time_rx', datetime.now())
@@ -92,7 +93,7 @@ class ResponseDecoderFactory:
             self.inverter_ser = params['inverter_ser']
             self.model = self.inverter_model
 
-    def unpack(self, fmt, base):
+    def unpack(self, fmt: str, base: int) -> tuple:
         """
         Data unpack helper
 
@@ -105,7 +106,7 @@ class ResponseDecoderFactory:
         return struct.unpack(fmt, self.response[base:base+size])
 
     @property
-    def inverter_model(self):
+    def inverter_model(self) -> str:
         """
         Find decoder for inverter model
 
@@ -135,7 +136,7 @@ class ResponseDecoderFactory:
         raise NotImplementedError('Model lookup failed for serial {ser_str}')
 
     @property
-    def request_command(self):
+    def request_command(self) -> str:
         """
         Return requested command identifier byte
 
@@ -151,11 +152,11 @@ class ResponseDecoder(ResponseDecoderFactory):
 
     :param bytes response: ESB frame response
     """
-    def __init__(self, response, **params):
+    def __init__(self, response: bytes, **params) -> None:
         """Initialize ResponseDecoder"""
         ResponseDecoderFactory.__init__(self, response, **params)
 
-    def decode(self):
+    def decode(self) -> Response:
         """
         Decode Payload
 
@@ -179,7 +180,7 @@ class ResponseDecoder(ResponseDecoderFactory):
 
 class InverterPacketFragment:
     """ESB Frame"""
-    def __init__(self, time_rx=None, payload=None, ch_rx=None, ch_tx=None, **params):
+    def __init__(self, time_rx: datetime = None, payload: bytes = None, ch_rx: int = None, ch_tx: int = None, **params) -> None:
         """
         Callback: get's invoked whenever a Nordic ESB packet has been received.
 
@@ -209,12 +210,12 @@ class InverterPacketFragment:
         self.ch_tx = ch_tx
 
     @property
-    def main_cmd(self):
+    def main_cmd(self) -> int:
         """Transaction counter"""
         return self.frame[0]
 
     @property
-    def src(self):
+    def src(self) -> int:
         """
         Sender adddress
 
@@ -224,7 +225,7 @@ class InverterPacketFragment:
         src = struct.unpack('>L', self.frame[1:5])
         return src[0]
     @property
-    def dst(self):
+    def dst(self) -> int:
         """
         Receiver adddress
 
@@ -234,7 +235,7 @@ class InverterPacketFragment:
         dst = struct.unpack('>L', self.frame[5:8])
         return dst[0]
     @property
-    def seq(self):
+    def seq(self) -> int:
         """
         Framne sequence number
 
@@ -244,7 +245,7 @@ class InverterPacketFragment:
         result = struct.unpack('>B', self.frame[9:10])
         return result[0]
     @property
-    def data(self):
+    def data(self) -> bytes:
         """
         Data without protocol framing
 
@@ -253,7 +254,7 @@ class InverterPacketFragment:
         """
         return self.frame[10:-1]
 
-    def __str__(self):
+    def __str__(self) -> str:
         """
         Represent received ESB frame
 
@@ -276,7 +277,7 @@ class HoymilesNRF:
     rx_error = 0
     txpower = 'max'
 
-    def __init__(self, **radio_config):
+    def __init__(self, **radio_config) -> None:
         """
         Claim radio device
 
@@ -294,7 +295,7 @@ class HoymilesNRF:
 
         self.radio = radio
 
-    def transmit(self, packet, txpower=None):
+    def transmit(self, packet: bytes, txpower: int = None) -> bool:
         """
         Transmit Packet
 
@@ -328,9 +329,13 @@ class HoymilesNRF:
         else:
             self.radio.setPALevel(RF24_PA_MAX)
 
-        return self.radio.write(packet)
+        if hasattr(self.radio, 'send'):
+            res = self.radio.send(packet)
+        else:
+            res = self.radio.write(packet)
+        return res
 
-    def receive(self, timeout=None):
+    def receive(self, timeout: int = None) -> Generator[bytes, None, None]:
         """
         Receive Packets
 
@@ -388,7 +393,7 @@ class HoymilesNRF:
 
             time.sleep(0.005)
 
-    def next_rx_channel(self):
+    def next_rx_channel(self) -> bool:
         """
         Select next channel from hop list
         - if hopping enabled
@@ -405,7 +410,7 @@ class HoymilesNRF:
         return False
 
     @property
-    def tx_channel(self):
+    def tx_channel(self) -> int:
         """
         Get current tx channel
 
@@ -415,7 +420,7 @@ class HoymilesNRF:
         return self.tx_channel_list[self.tx_channel_id]
 
     @property
-    def rx_channel(self):
+    def rx_channel(self) -> int:
         """
         Get current rx channel
 
@@ -427,7 +432,7 @@ class HoymilesNRF:
     def __del__(self):
         self.radio.powerDown()
 
-def frame_payload(payload):
+def frame_payload(payload: bytes) -> bytes:
     """
     Prepare payload for transmission, append Modbus CRC16
 
@@ -440,7 +445,8 @@ def frame_payload(payload):
 
     return payload
 
-def compose_esb_fragment(fragment, maincmd=b'\x15', subcmd=b'\x80\x0b', src=99999999, dst=1, **params):
+def compose_esb_fragment(fragment: bytes, maincmd: bytes = b'\x15', subcmd: bytes = b'\x80\x0b',
+        src: int = 99999999, dst: int = 1, **params) -> bytes:
     """
     Build standart ESB request fragment
 
@@ -470,7 +476,7 @@ def compose_esb_fragment(fragment, maincmd=b'\x15', subcmd=b'\x80\x0b', src=9999
 
     return packet
 
-def compose_esb_packet(packet, mtu=17, **params):
+def compose_esb_packet(packet: bytes, mtu: int = 17, **params) -> Generator[bytes, None, None]:
     """
     Build ESB packet, chunk packet
 
@@ -483,6 +489,70 @@ def compose_esb_packet(packet, mtu=17, **params):
         fragment = compose_esb_fragment(packet[i:i+mtu], **params)
         yield fragment
 
+class ESBFrame:
+    l_addr = 4
+    preamble = b'\x15'
+    target = b'\x00\x00\x00\x00'
+    source = b'\x00\x00\x00\x00'
+    payload = b''
+
+    @staticmethod
+    def frombytes(data: bytes, **params):
+        l_addr = params.get('address_length', ESBFrame.l_addr)
+        o_target = 1 + l_addr
+        o_data = o_target + l_addr
+
+        return ESBFrame(
+                preamble=data[:1],
+                source=data[o_target:o_data],
+                target=data[1:o_target],
+                payload=data[o_data:-1],
+                **params)
+
+    @staticmethod
+    def fromhex(data: str, **params):
+        return ESBFrame.frombytes(bytes.fromhex(data))
+
+    def __init__(self, **params) -> None:
+        self.payload = params.get('payload', b'')
+        self.l_addr = params.get('address_length', ESBFrame.l_addr)
+        self.set_source(params['source'])
+        self.set_target(params['target'])
+
+    def set_preamble(self, preamble: bytes) -> None:
+        if len(source) != 1:
+            raise ValueError(f'Set invalid preamble legth {len(preamble)}, required 1')
+        self.preamble = preamble
+
+    def set_source(self, addr: int) -> None:
+        if len(addr) != self.l_addr:
+            raise ValueError(f'Set invalid source address legth {len(addr)}, required {self.l_addr}')
+        self.source = addr
+
+    def set_target(self, addr: int) -> None:
+        if len(addr) != self.l_addr:
+            raise ValueError(f'Set invalid target address legth {len(addr)}, required {self.l_addr}')
+        self.target = addr
+
+    @property
+    def packet(self) -> bytes:
+        packet = self.preamble
+        packet = packet + self.target
+        packet = packet + self.source
+        packet = packet + self.payload
+        return packet
+
+    @property
+    def crc(self) -> bytes:
+        crc8 = f_crc8(self.packet)
+        return struct.pack('B', crc8)
+
+    def __bytes__(self) -> bytes:
+        return self.packet + self.crc
+
+    def __repr__(self) -> str:
+        return hexify_payload(self.__bytes__())
+
 class RequestFactory:
     _maincmd = b'\x15'
     _source = b'\x00\x00\x00\x00'
@@ -491,7 +561,7 @@ class RequestFactory:
     _payload = b''
     _mtu = 16
 
-    def __init__(self, payload, **params):
+    def __init__(self, payload: bytes, **params) -> None:
         self._payload = payload
 
         if 'dtu_ser' in params:
@@ -503,28 +573,28 @@ class RequestFactory:
         if 'maincmd' in params:
             self.maincmd(params['maincmd'])
 
-    def source(self, source):
+    def source(self, source: int) -> None:
         self._source = ser_to_hm_addr(source)
 
-    def target(self, target):
+    def target(self, target: int) -> None:
         self._target = ser_to_hm_addr(target)
 
-    def maincmd(self, maincmd):
+    def maincmd(self, maincmd: bytes) -> None:
         self._maincmd = maincmd
 
-    def subcmd(self, subcmd):
+    def subcmd(self, subcmd: bytes) -> None:
         self._subcmd = subcmd
 
     @property
-    def fragment(self, num):
+    def fragment(self, num: int) -> None:
         return
 
     @property
-    def crc(self):
+    def crc(self) -> bytes:
         crc = f_crc_m(self._payload)
         return struct.pack('>H', crc)
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[ESBFrame, None, None]:
         n_frame = 0x00
         payload = self._payload + self.crc
         l_payload = len(payload)
@@ -539,71 +609,7 @@ class RequestFactory:
                     target=self._target,
                     payload=subcmd + payload[i_base:i_base+self._mtu])
 
-class ESBFrame:
-    l_addr = 4
-    preamble = b'\x15'
-    target = b'\x00\x00\x00\x00'
-    source = b'\x00\x00\x00\x00'
-    payload = b''
-
-    @staticmethod
-    def frombytes(data, **params):
-        l_addr = params.get('address_length', ESBFrame.l_addr)
-        o_target = 1 + l_addr
-        o_data = o_target + l_addr
-
-        return ESBFrame(
-                preamble=data[:1],
-                source=data[o_target:o_data],
-                target=data[1:o_target],
-                payload=data[o_data:-1],
-                **params)
-
-    @staticmethod
-    def fromhex(data, **params):
-        return ESBFrame.frombytes(bytes.fromhex(data))
-
-    def __init__(self, **params):
-        self.payload = params.get('payload', b'')
-        self.l_addr = params.get('address_length', ESBFrame.l_addr)
-        self.set_source(params['source'])
-        self.set_target(params['target'])
-
-    def set_preamble(self, preamble):
-        if len(source) != 1:
-            raise ValueError(f'Set invalid preamble legth {len(preamble)}, required 1')
-        self.preamble = preamble
-
-    def set_source(self, addr):
-        if len(addr) != self.l_addr:
-            raise ValueError(f'Set invalid source address legth {len(addr)}, required {self.l_addr}')
-        self.source = addr
-
-    def set_target(self, addr):
-        if len(addr) != self.l_addr:
-            raise ValueError(f'Set invalid target address legth {len(addr)}, required {self.l_addr}')
-        self.target = addr
-
-    @property
-    def packet(self):
-        packet = self.preamble
-        packet = packet + self.target
-        packet = packet + self.source
-        packet = packet + self.payload
-        return packet
-
-    @property
-    def crc(self):
-        crc8 = f_crc8(self.packet)
-        return struct.pack('B', crc8)
-
-    def __bytes__(self):
-        return self.packet + self.crc
-
-    def __repr__(self):
-        return hexify_payload(self.__bytes__())
-
-def compose_set_time_payload(timestamp=None):
+def compose_set_time_payload(timestamp: int = None) -> bytes:
     """
     Build set time request packet
 
@@ -638,11 +644,11 @@ class InverterTransaction:
     txpower = None
 
     def __init__(self,
-            request_time=None,
-            inverter_ser=None,
-            dtu_ser=None,
-            radio=None,
-            **params):
+            request_time: datetime = None,
+            inverter_ser: str = None,
+            dtu_ser: str = None,
+            radio: HoymilesNRF = None,
+            **params) -> None:
         """
         :param request: Transmit ESB packet
         :type request: bytes
@@ -684,7 +690,7 @@ class InverterTransaction:
             self.inverter_addr, self.dtu_addr, seq, self.req_type = struct.unpack('>LLBB', params['request'][1:11])
         self.request_time = request_time
 
-    def rxtx(self):
+    def rxtx(self) -> bool:
         """
         Transmit next packet from tx_queue if available
         and wait for responses
@@ -719,7 +725,7 @@ class InverterTransaction:
 
         return wait
 
-    def frame_append(self, frame):
+    def frame_append(self, frame: bytes) -> bytes:
         """
         Append received raw frame to local scratch buffer
 
@@ -728,7 +734,7 @@ class InverterTransaction:
         """
         self.scratch.append(frame)
 
-    def queue_tx(self, frame):
+    def queue_tx(self, frame: bytes) -> bool:
         """
         Enqueue packet for transmission if radio is available
 
@@ -743,7 +749,7 @@ class InverterTransaction:
 
         return True
 
-    def get_payload(self, src=None):
+    def get_payload(self, src: bytes = None) -> bytes:
         """
         Reconstruct Hoymiles payload from scratch buffer
 
@@ -791,7 +797,7 @@ class InverterTransaction:
 
         return (end_frame.main_cmd, payload,)
 
-    def __retransmit_frame(self, frame_id):
+    def __retransmit_frame(self, frame_id: int) -> bytes:
         """
         Build and queue retransmit request
 
@@ -810,7 +816,7 @@ class InverterTransaction:
 
         return self.queue_tx(packet)
 
-    def __str__(self):
+    def __str__(self) -> str:
         """
         Represent transmit payload
 
@@ -821,7 +827,7 @@ class InverterTransaction:
         size = len(self.request)
         return f'{c_datetime} Transmit | {hexify_payload(self.request)}'
 
-def hexify_payload(byte_var):
+def hexify_payload(byte_var: bytes) -> str:
     """
     Represent bytes
 

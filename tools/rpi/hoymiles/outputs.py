@@ -39,8 +39,9 @@ class OutputPluginFactory:
 class InfluxOutputPlugin(OutputPluginFactory):
     """ Influx2 output plugin """
     api = None
+    typesafe = True
 
-    def __init__(self, url, token, **params):
+    def __init__(self, url: str, token: str, **params):
         """
         Initialize InfluxOutputPlugin
 
@@ -55,6 +56,9 @@ class InfluxOutputPlugin(OutputPluginFactory):
         :type bucket: str
         :param measurement: Default measurement-prefix to use
         :type measurement: str
+        :param typesafe: use typesafe field names
+        :type typesafe: bool
+        :param single_field_name: default: "value" if typesafe=False
         """
         super().__init__(**params)
 
@@ -62,6 +66,9 @@ class InfluxOutputPlugin(OutputPluginFactory):
         self._org = params.get('org', '')
         self._measurement = params.get('measurement',
                 f'inverter,host={socket.gethostname()}')
+
+        self.typesafe = params.get('typesafe', True)
+        self.single_field_name = params.get('single_field_name', 'value')
 
         client = InfluxDBClient(url, token, bucket=self._bucket)
         self.api = client.write_api()
@@ -97,29 +104,56 @@ class InfluxOutputPlugin(OutputPluginFactory):
         # InfluxDB requires nanoseconds
         ctime = int(utctime.timestamp() * 1e9)
 
-        # AC Data
-        phase_id = 0
-        for phase in data['phases']:
-            data_stack.append(f'{measurement},phase={phase_id},type=power value={phase["power"]} {ctime}')
-            data_stack.append(f'{measurement},phase={phase_id},type=voltage value={phase["voltage"]} {ctime}')
-            data_stack.append(f'{measurement},phase={phase_id},type=current value={phase["current"]} {ctime}')
-            phase_id = phase_id + 1
+        if self.typesafe:
+            # Influx typesafe
+            # AC Data
+            phase_id = 0
+            for phase in data['phases']:
+                data_stack.append(f'{measurement},phase={phase_id} power={phase["power"]} {ctime}')
+                data_stack.append(f'{measurement},phase={phase_id} voltage={phase["voltage"]} {ctime}')
+                data_stack.append(f'{measurement},phase={phase_id} current={phase["current"]} {ctime}')
+                phase_id = phase_id + 1
 
-        # DC Data
-        string_id = 0
-        for string in data['strings']:
-            data_stack.append(f'{measurement},string={string_id},type=total value={string["energy_total"]/1000:.4f} {ctime}')
-            data_stack.append(f'{measurement},string={string_id},type=power value={string["power"]:.2f} {ctime}')
-            data_stack.append(f'{measurement},string={string_id},type=voltage value={string["voltage"]:.3f} {ctime}')
-            data_stack.append(f'{measurement},string={string_id},type=current value={string["current"]:3f} {ctime}')
-            string_id = string_id + 1
-        # Global
-        if data['event_count'] is not None:
-            data_stack.append(f'{measurement},type=total_events value={data["event_count"]} {ctime}')
-        if data['powerfactor'] is not None:
-            data_stack.append(f'{measurement},type=pf value={data["powerfactor"]:f} {ctime}')
-        data_stack.append(f'{measurement},type=frequency value={data["frequency"]:.3f} {ctime}')
-        data_stack.append(f'{measurement},type=temperature value={data["temperature"]:.2f} {ctime}')
+            # DC Data
+            string_id = 0
+            for string in data['strings']:
+                data_stack.append(f'{measurement},string={string_id},type=total energy={string["energy_total"]/1000:.4f} {ctime}')
+                data_stack.append(f'{measurement},string={string_id},type=power power={string["power"]:.2f} {ctime}')
+                data_stack.append(f'{measurement},string={string_id},type=voltage voltage={string["voltage"]:.3f} {ctime}')
+                data_stack.append(f'{measurement},string={string_id},type=current current={string["current"]:3f} {ctime}')
+                string_id = string_id + 1
+            # Global
+            if data['event_count'] is not None:
+                data_stack.append(f'{measurement},type=total_events count={data["event_count"]}i {ctime}')
+            if data['powerfactor'] is not None:
+                data_stack.append(f'{measurement} powerfactor={data["powerfactor"]:f} {ctime}')
+            data_stack.append(f'{measurement} frequency={data["frequency"]:.3f} {ctime}')
+            data_stack.append(f'{measurement} temperature={data["temperature"]:.2f} {ctime}')
+        else:
+            # Legacy
+            # AC Data
+            phase_id = 0
+            for phase in data['phases']:
+                data_stack.append(f'{measurement},phase={phase_id},type=power {self.single_field_name}={phase["power"]} {ctime}')
+                data_stack.append(f'{measurement},phase={phase_id},type=voltage {self.single_field_name}={phase["voltage"]} {ctime}')
+                data_stack.append(f'{measurement},phase={phase_id},type=current {self.single_field_name}={phase["current"]} {ctime}')
+                phase_id = phase_id + 1
+
+            # DC Data
+            string_id = 0
+            for string in data['strings']:
+                data_stack.append(f'{measurement},string={string_id},type=total {self.single_field_name}={string["energy_total"]/1000:.4f} {ctime}')
+                data_stack.append(f'{measurement},string={string_id},type=power {self.single_field_name}={string["power"]:.2f} {ctime}')
+                data_stack.append(f'{measurement},string={string_id},type=voltage {self.single_field_name}={string["voltage"]:.3f} {ctime}')
+                data_stack.append(f'{measurement},string={string_id},type=current {self.single_field_name}={string["current"]:3f} {ctime}')
+                string_id = string_id + 1
+            # Global
+            if data['event_count'] is not None:
+                data_stack.append(f'{measurement},type=total_events {self.single_field_name}={data["event_count"]} {ctime}')
+            if data['powerfactor'] is not None:
+                data_stack.append(f'{measurement},type=pf {self.single_field_name}={data["powerfactor"]:f} {ctime}')
+            data_stack.append(f'{measurement},type=frequency {self.single_field_name}={data["frequency"]:.3f} {ctime}')
+            data_stack.append(f'{measurement},type=temperature {self.single_field_name}={data["temperature"]:.2f} {ctime}')
 
         self.api.write(self._bucket, self._org, data_stack)
 
